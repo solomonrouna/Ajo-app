@@ -1,10 +1,8 @@
-
 function Layout({ page, setPage, children }) {
   const navItems = [
     { id: 'home', label: 'Home' },
     { id: 'circle', label: 'Circle' },
     { id: 'wallet', label: 'Wallet' },
-    { id: 'settle', label: 'Settle' },
     { id: 'audit', label: 'Audit' },
   ];
 
@@ -19,8 +17,8 @@ function Layout({ page, setPage, children }) {
           <button
             key={item.id}
             className={`nav-item ${page === item.id ? 'active' : ''}`}
-            onClick={() => (item.id === 'home' || item.id === 'circle') && setPage(item.id)}
-            disabled={item.id !== 'home' && item.id !== 'circle'}
+            onClick={() => (item.id === 'home' || item.id === 'circle' || item.id === 'audit' || item.id === 'wallet') && setPage(item.id)}
+            disabled={item.id !== 'home' && item.id !== 'circle' && item.id !== 'audit' && item.id !== 'wallet'}
           >
             <span className="nav-dot"></span>
             {item.label}
@@ -35,8 +33,8 @@ function Layout({ page, setPage, children }) {
           <button
             key={item.id}
             className={`nav-item ${page === item.id ? 'active' : ''}`}
-            onClick={() => (item.id === 'home' || item.id === 'circle') && setPage(item.id)}
-            disabled={item.id !== 'home' && item.id !== 'circle'}
+            onClick={() => (item.id === 'home' || item.id === 'circle' || item.id === 'audit' || item.id === 'wallet') && setPage(item.id)}
+            disabled={item.id !== 'home' && item.id !== 'circle' && item.id !== 'audit' && item.id !== 'wallet'}
           >
             <span className="nav-dot"></span>
             {item.label}

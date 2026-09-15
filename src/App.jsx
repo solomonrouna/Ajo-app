@@ -1,18 +1,23 @@
 import {useState,useEffect} from 'react'
 import { supabase } from './supabaseClient.js'
 import LoginPage from './loginPage.jsx'
-import Dashboard from './Dashboard.jsx'
+import HomePage from './Home.jsx'
+import WalletPage from './Wallet.jsx'
 import './App.css'
 import Layout from './Layout.jsx'
 import CirclePage from './circlePage.jsx'
+import AuditPage from './AuditPage.jsx'
 
   function App() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [fullName, setFullName] = useState('')
   const [session, setSession] = useState(null)
-  const [page, setPage] = useState('signup') // State to track the current page
-  const [loading, setLoading] = useState(true) // State to track loading status
+  const [page, setPage] = useState('signup')
+  const [loading, setLoading] = useState(true)
+  const [selectedCircle, setSelectedCircle] = useState(null)
+  const [circleToOpen, setCircleToOpen] = useState(null)
+
   useEffect(() => {
      supabase.auth.getSession().then(({ data: { session } }) => {
       setSession(session)
@@ -44,9 +49,28 @@ return (
     {session ? (
      <Layout page={page} setPage={setPage}>
   {page === 'circle' ? (
-    <CirclePage session={session} />
+    <CirclePage
+      session={session}
+      selectedCircle={selectedCircle}
+      setSelectedCircle={setSelectedCircle}
+      circleToOpen={circleToOpen}
+      setCircleToOpen={setCircleToOpen}
+    />
+  ) : page === 'wallet' ? (
+    <WalletPage session={session} />
+  ) : page === 'audit' ? (
+    selectedCircle ? (
+      <AuditPage circleId={selectedCircle.id} />
+    ) : (
+      <p className="dashboard-sub" style={{ marginTop: '20px' }}>Open a circle first to view its audit log.</p>
+    )
   ) : (
-    <Dashboard session={session} setSession={setSession} />
+    <HomePage
+      session={session}
+      setSession={setSession}
+      setPage={setPage}
+      setCircleToOpen={setCircleToOpen}
+    />
   )}
 </Layout>
     ) : page === 'signup' ? (

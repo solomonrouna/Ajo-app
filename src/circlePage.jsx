@@ -1,14 +1,17 @@
 import { useState,useEffect } from "react";
 import { supabase } from "./supabaseClient";
+import PinModal from "./PinModal.jsx";
 
-function CirclePage({ session }) {
+function CirclePage({ session, selectedCircle, setSelectedCircle, circleToOpen, setCircleToOpen }) {
 const [circles , setCircles] = useState([]);
-const [selectedCircle, setSelectedCircle] = useState(null);
 const [members, setMembers] = useState([]);
 const [inviteEmail, setInviteEmail] = useState('');
 const [paidUserIds, setPaidUserIds] = useState([]);
 const [walletBalance, setWalletBalance] = useState(null);
 const [myDebts, setMyDebts] = useState([]);
+const [showPinModal, setShowPinModal] = useState(false);
+const [pendingDebt, setPendingDebt] = useState(null);
+const [banner, setBanner] = useState(null);
 
 async function fetchWalletBalance() {
   const { data, error } = await supabase
@@ -25,6 +28,19 @@ useEffect(() => {
   fetchCircles();
   fetchWalletBalance();
 }, []);
+
+useEffect(() => {
+  if (circleToOpen) {
+    openCircle(circleToOpen);
+    setCircleToOpen(null);
+  }
+}, [circleToOpen]);
+
+useEffect(() => {
+  if (!banner) return;
+  const timer = setTimeout(() => setBanner(null), 4000);
+  return () => clearTimeout(timer);
+}, [banner]);
 
 async function handleCreateCircle(){
     const name = prompt('Circle name ?')
@@ -129,46 +145,37 @@ async function fetchMyDebts(circleId) {
   if (data) setMyDebts(data);
 }
 
-async function handleSettleDebt(debt) {
-  if (walletBalance < debt.amount) {
-    alert('Insufficient balance to settle this debt.');
-    return;
-  }
+function handleSettleDebt(debt) {
+  setPendingDebt(debt);
+  setShowPinModal(true);
+}
 
-  const { error: debitError } = await supabase.rpc('add_ledger_entry', {
-    p_wallet_id: session.user.id,
+async function completeSettleDebt() {
+  setShowPinModal(false);
+  const debt = pendingDebt;
+
+  const { error } = await supabase.rpc('settle_debt', {
+    p_debt_id: debt.id,
+    p_debtor_id: session.user.id,
+    p_creditor_id: debt.creditor_id,
     p_amount: debt.amount,
-    p_direction: 'debit',
-    p_description: `Debt settlement - Cycle ${debt.cycle_number}`
+    p_cycle_number: debt.cycle_number
   });
 
-  if (debitError) {
-    console.log('error debiting debtor wallet', debitError.message);
-    alert('Could not process debt payment.');
+  if (error) {
+    console.log('error settling debt', error.message);
+    setBanner({
+      type: 'error',
+      message: error.message.includes('Insufficient') ? 'Insufficient balance to settle this debt.' : 'Could not process debt payment.'
+    });
+    setPendingDebt(null);
     return;
   }
 
-  const { error: creditError } = await supabase.rpc('add_ledger_entry', {
-    p_wallet_id: debt.creditor_id,
-    p_amount: debt.amount,
-    p_direction: 'credit',
-    p_description: `Debt received - Cycle ${debt.cycle_number}`
-  });
-
-  if (creditError) {
-    console.log('error crediting creditor wallet', creditError.message);
-    alert('Payment taken but could not reach the creditor. Contact support.');
-    return;
-  }
-
-  await supabase
-    .from('debts')
-    .update({ status: 'settled' })
-    .eq('id', debt.id);
-
-  alert('Debt settled successfully!');
+  setBanner({ type: 'success', message: `₦${debt.amount.toLocaleString()} debt settled.` });
   fetchMyDebts(selectedCircle.id);
   fetchWalletBalance();
+  setPendingDebt(null);
 }
 
 async function checkForMissedPayments(circle) {
@@ -178,7 +185,7 @@ async function checkForMissedPayments(circle) {
   if (!isOverdue) return;
 
   if (circle.missed_payments_processed_cycle === circle.current_cycle) {
-    return; // already handled this cycle
+    return;
   }
 
   const { data: memberRows } = await supabase
@@ -196,7 +203,7 @@ async function checkForMissedPayments(circle) {
   const missedMembers = (memberRows || []).filter((m) => !paidIds.includes(m.user_id));
 
   if (missedMembers.length === 0) {
-    return; // everyone paid, nothing missed
+    return;
   }
 
   const position = ((circle.current_cycle - 1) % memberRows.length) + 1;
@@ -208,7 +215,7 @@ async function checkForMissedPayments(circle) {
   }
 
   for (const missed of missedMembers) {
-    if (missed.user_id === collector.user_id) continue; // collector can't owe themselves
+    if (missed.user_id === collector.user_id) continue;
 
     const { error: debtInsertError } = await supabase.from('debts').insert({
       circle_id: circle.id,
@@ -242,6 +249,7 @@ async function checkForMissedPayments(circle) {
 
   console.log('missed payments processed for cycle', circle.current_cycle);
 }
+
 async function openCircle(circleId) {
   const { data: freshCircle, error } = await supabase
     .from('circles')
@@ -423,8 +431,6 @@ async function checkAndTriggerPayouts(circleId, cycleNumber, forceOverride = fal
   .select('*',{count:"exact",head:true})
   .eq('circle_id',circleId)
 
-  console.log('payout check — memberCount:', memberCount, 'target:', circleData.target_member_count);
-
   if (memberCount < circleData.target_member_count) {
     console.log('STOPPED: circle not full yet');
     return;
@@ -436,15 +442,12 @@ async function checkAndTriggerPayouts(circleId, cycleNumber, forceOverride = fal
   .eq('circle_id',circleId)
   .eq('cycle_number',cycleNumber);
 
-  console.log('payout check — paidCount:', paidCount, 'forceOverride:', forceOverride);
-
   if(paidCount< memberCount && !forceOverride){
     console.log('STOPPED: not everyone paid and not forcing');
     return;
   }
 
   const position = ((cycleNumber - 1) % memberCount) + 1;
-  console.log('cycle:', cycleNumber, 'memberCount:', memberCount, 'position:', position);
 
   const {data:collector} =await supabase
   .from('circle_members')
@@ -458,54 +461,23 @@ async function checkAndTriggerPayouts(circleId, cycleNumber, forceOverride = fal
     return;
   }
 
-  let payoutAmount = circleData.contribution_amount * paidCount;
-
-  const { data: collectorDebts } = await supabase
-    .from('debts')
-    .select('*')
-    .eq('circle_id', circleId)
-    .eq('debtor_id', collector.user_id)
-    .eq('status', 'outstanding')
-    .order('created_at', { ascending: true });
-
-  for (const debt of (collectorDebts || [])) {
-    if (payoutAmount <= 0) break;
-    if (debt.amount <= payoutAmount) {
-      const { error: debtCreditError } = await supabase.rpc('add_ledger_entry', {
-        p_wallet_id: debt.creditor_id,
-        p_amount: debt.amount,
-        p_direction: 'credit',
-        p_description: `Debt settled from ${circleData.name} payout - Cycle ${debt.cycle_number}`
-      });
-
-      if (!debtCreditError) {
-        await supabase.from('debts').update({ status: 'settled' }).eq('id', debt.id);
-        payoutAmount -= debt.amount;
-      }
-    }
-  }
-
-  if (payoutAmount > 0) {
-    const {error: payoutError} = await supabase.rpc('add_ledger_entry',{
-    p_wallet_id: collector.user_id,
-    p_amount: payoutAmount,
-    p_direction: 'credit',
-    p_description: `Payout for ${circleData.name} - Cycle ${cycleNumber}`
-    });
-
-    if(payoutError){
-      console.log('STOPPED: Error adding payout entry', payoutError.message);
-      alert('Payout failed. Please contact support.');
-      return;
-    }
-  }
-
+  const payoutAmount = circleData.contribution_amount * paidCount;
   const nextDueDate = new Date(Date.now() + circleData.cycle_duration_days * 24 * 60 * 60 * 1000).toISOString();
 
-  await supabase
-  .from('circles')
-  .update({ current_cycle: cycleNumber + 1, current_cycle_due_date: nextDueDate })
-  .eq('id', circleId)
+  const { error: payoutError } = await supabase.rpc('process_payout', {
+    p_circle_id: circleId,
+    p_cycle_number: cycleNumber,
+    p_collector_id: collector.user_id,
+    p_payout_amount: payoutAmount,
+    p_circle_name: circleData.name,
+    p_next_due_date: nextDueDate
+  });
+
+  if (payoutError) {
+    console.log('STOPPED: Error processing payout', payoutError.message);
+    alert('Payout failed. Please contact support.');
+    return;
+  }
 
   if (selectedCircle && selectedCircle.id === circleId) {
     setSelectedCircle({ ...selectedCircle, current_cycle: cycleNumber + 1, current_cycle_due_date: nextDueDate });
@@ -531,36 +503,17 @@ async function handlePayContribution(){
     return;
   }
 
-  if (walletBalance < selectedCircle.contribution_amount) {
-    alert('Insufficient balance. Please fund your wallet.');
-    return;
-  }
-
-  const {error: ledgerError} = await supabase.rpc('add_ledger_entry',{
-    p_wallet_id: session.user.id,
+  const {error} = await supabase.rpc('pay_contribution', {
+    p_circle_id: selectedCircle.id,
+    p_user_id: session.user.id,
+    p_cycle_number: selectedCircle.current_cycle,
     p_amount: selectedCircle.contribution_amount,
-    p_direction: 'debit',
     p_description: `Contribution for ${selectedCircle.name} - Cycle ${selectedCircle.current_cycle}`
   });
 
-  if(ledgerError){
-    console.log('Error deducting from wallet', ledgerError.message);
-    alert('Payment failed. Please check your wallet balance.');
-    return;
-  }
-
-  const {error: contributionError} = await supabase
-    .from('contributions')
-    .insert({
-      circle_id: selectedCircle.id,
-      user_id: session.user.id,
-      cycle_number: selectedCircle.current_cycle,
-      amount: selectedCircle.contribution_amount
-    });
-
-  if (contributionError) {
-    console.log('Error inserting contribution', contributionError.message);
-    alert('Payment deducted from wallet but failed to record contribution. Please contact support.');
+  if (error) {
+    console.log('Error paying contribution', error.message);
+    alert(error.message.includes('Insufficient') ? 'Insufficient balance. Please fund your wallet.' : 'Payment failed. Please try again.');
     return;
   }
 
@@ -569,8 +522,6 @@ async function handlePayContribution(){
   fetchWalletBalance();
   checkAndTriggerPayouts(selectedCircle.id, selectedCircle.current_cycle);
 }
-
-
 
 return (
   <div className="dashboard">
@@ -585,6 +536,20 @@ return (
             Delete Circle
           </button>
         )}
+
+        {banner && (
+          <div style={{
+            marginTop: '12px',
+            padding: '12px 16px',
+            borderRadius: '10px',
+            background: banner.type === 'success' ? '#ecfdf5' : '#fef2f2',
+            color: banner.type === 'success' ? '#065f46' : '#b91c1c',
+            fontSize: '14px'
+          }}>
+            {banner.message}
+          </div>
+        )}
+
         <h1 className="dashboard-greeting">{selectedCircle.name}</h1>
         <p className="dashboard-sub">₦{selectedCircle.contribution_amount.toLocaleString()} per cycle</p>
         <p className="dashboard-sub">{members.length} of {selectedCircle.target_member_count} members</p>
@@ -745,6 +710,14 @@ return (
           ))}
         </div>
       </>
+    )}
+
+    {showPinModal && (
+      <PinModal
+        userId={session.user.id}
+        onSuccess={completeSettleDebt}
+        onCancel={() => { setShowPinModal(false); setPendingDebt(null); }}
+      />
     )}
   </div>
 );
