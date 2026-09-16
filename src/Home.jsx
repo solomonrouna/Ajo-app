@@ -1,11 +1,17 @@
 import { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient.js';
+import PinModal from './PinModal.jsx';
+import AmountModal from './AmountModal.jsx';
 
 function HomePage({ session, setSession, setPage, setCircleToOpen }) {
   const [circles, setCircles] = useState([]);
   const [balance, setBalance] = useState(null);
   const [invites, setInvites] = useState([]);
   const [showInvites, setShowInvites] = useState(false);
+  const [amountModalMode, setAmountModalMode] = useState(null);
+  const [showPinModal, setShowPinModal] = useState(false);
+  const [pendingWithdrawAmount, setPendingWithdrawAmount] = useState(null);
+  const [banner, setBanner] = useState(null);
 
   useEffect(() => {
     if (!session) return;
@@ -13,6 +19,12 @@ function HomePage({ session, setSession, setPage, setCircleToOpen }) {
     fetchCirclesWithProgress();
     fetchInvites();
   }, []);
+
+  useEffect(() => {
+    if (!banner) return;
+    const timer = setTimeout(() => setBanner(null), 4000);
+    return () => clearTimeout(timer);
+  }, [banner]);
 
   function fetchBalance() {
     supabase
@@ -33,32 +45,28 @@ function HomePage({ session, setSession, setPage, setCircleToOpen }) {
       .eq('status', 'pending');
 
     if (data) setInvites(data.filter((invite) => invite.circles !== null));
-  }gi
+  }
 
   async function respondToInvite(inviteId, circleId, accept) {
-    const { error: updateError } = await supabase
-      .from('circle_invites')
-      .update({ status: accept ? 'accepted' : 'declined' })
-      .eq('id', inviteId);
-
-    if (updateError) {
-      console.log('error updating invite', updateError.message);
-      return;
-    }
-
     if (accept) {
       const { count } = await supabase
         .from('circle_members')
         .select('*', { count: 'exact', head: true })
         .eq('circle_id', circleId);
 
-      const { data: circleData } = await supabase
+      const { data: circleData, error: circleError } = await supabase
         .from('circles')
         .select('target_member_count')
         .eq('id', circleId)
-        .single();
+        .maybeSingle();
 
-      if (circleData && count >= circleData.target_member_count) {
+      if (circleError || !circleData) {
+        console.log('error fetching circle for invite', circleError?.message);
+        alert('Could not process this invite. Please try again.');
+        return;
+      }
+
+      if (count >= circleData.target_member_count) {
         alert('This circle is already full. You cannot join.');
         return;
       }
@@ -71,7 +79,22 @@ function HomePage({ session, setSession, setPage, setCircleToOpen }) {
           role: 'member',
           payout_position: (count || 0) + 1
         });
-      if (memberError) console.log('error joining circle', memberError.message);
+
+      if (memberError) {
+        console.log('error joining circle', memberError.message);
+        alert('Could not join circle. Please try again.');
+        return;
+      }
+    }
+
+    const { error: updateError } = await supabase
+      .from('circle_invites')
+      .update({ status: accept ? 'accepted' : 'declined' })
+      .eq('id', inviteId);
+
+    if (updateError) {
+      console.log('error updating invite', updateError.message);
+      return;
     }
 
     fetchInvites();
@@ -146,6 +169,53 @@ function HomePage({ session, setSession, setPage, setCircleToOpen }) {
     setPage('circle');
   }
 
+  async function confirmFund(amount) {
+    setAmountModalMode(null);
+    const { error } = await supabase.rpc('add_ledger_entry', {
+      p_wallet_id: session.user.id,
+      p_amount: amount,
+      p_direction: 'credit',
+      p_description: 'Wallet funding'
+    });
+
+    if (error) {
+      console.log('Error funding wallet', error.message);
+      setBanner({ type: 'error', message: 'Could not fund wallet. Please try again.' });
+    } else {
+      setBanner({ type: 'success', message: `₦${amount.toLocaleString()} added to your wallet.` });
+      fetchBalance();
+      fetchCirclesWithProgress();
+    }
+  }
+
+  function confirmWithdrawAmount(amount) {
+    setAmountModalMode(null);
+    setPendingWithdrawAmount(amount);
+    setShowPinModal(true);
+  }
+
+  async function completeWithdraw() {
+    setShowPinModal(false);
+    const { error } = await supabase.rpc('add_ledger_entry', {
+      p_wallet_id: session.user.id,
+      p_amount: pendingWithdrawAmount,
+      p_direction: 'debit',
+      p_description: 'Wallet withdrawn'
+    });
+
+    if (error) {
+      console.log('Error withdrawing', error.message);
+      setBanner({
+        type: 'error',
+        message: error.message.includes('Insufficient') ? 'Insufficient balance.' : 'Withdrawal failed.'
+      });
+    } else {
+      setBanner({ type: 'success', message: `₦${pendingWithdrawAmount.toLocaleString()} withdrawn.` });
+      fetchBalance();
+    }
+    setPendingWithdrawAmount(null);
+  }
+
   if (showInvites) {
     return (
       <div className="dashboard">
@@ -197,33 +267,58 @@ function HomePage({ session, setSession, setPage, setCircleToOpen }) {
             </div>
           </div>
 
-          <div className="passbook-entry" style={{ marginTop: '16px' }}>
-            <p className="passbook-label">Wallet balance</p>
-            <p className="passbook-amount">₦{balance !== null ? balance.toLocaleString() : '···'}</p>
-            <div className="passbook-actions">
-              <button className="passbook-action primary" onClick={() => setPage('wallet')}>+ Fund wallet</button>
-              <button className="passbook-action secondary" onClick={() => setPage('wallet')}>Withdraw</button>
+          {banner && (
+            <div style={{
+              marginTop: '12px',
+              padding: '12px 16px',
+              borderRadius: '10px',
+              background: banner.type === 'success' ? '#ecfdf5' : '#fef2f2',
+              color: banner.type === 'success' ? '#065f46' : '#b91c1c',
+              fontSize: '14px'
+            }}>
+              {banner.message}
             </div>
+          )}
+
+          <div className="passbook-entry ajo-hero-card" style={{ marginTop: '16px' }}>
+            <div className="passbook-top">
+              <div className="passbook-info">
+                <p className="passbook-label">Wallet balance</p>
+                <p className="passbook-amount">₦{balance !== null ? balance.toLocaleString() : '···'}</p>
+              </div>
+              <div className="passbook-actions">
+                <button className="passbook-action primary" onClick={() => setAmountModalMode('fund')}>+ Fund wallet</button>
+                <button className="passbook-action secondary" onClick={() => setAmountModalMode('withdraw')}>Withdraw</button>
+              </div>
+            </div>
+            <p className="passbook-trust">Your funds are safe and secure</p>
           </div>
 
           <div style={{ display: 'flex', gap: '12px', marginTop: '16px' }}>
             <div className="circle-card" style={{ flex: 1, flexDirection: 'column', alignItems: 'flex-start' }}>
+              <div className="ajo-chip ajo-chip--blue">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="6" width="18" height="13" rx="2"/><path d="M3 10h18"/><circle cx="17" cy="14" r="1"/></svg>
+              </div>
               <p className="stat-amount">₦{Math.round(committedPerMonth).toLocaleString()}</p>
               <p className="dashboard-sub">Committed / mo</p>
             </div>
             <div className="circle-card" style={{ flex: 1, flexDirection: 'column', alignItems: 'flex-start' }}>
+              <div className="ajo-chip ajo-chip--green">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="9" cy="7" r="3"/><path d="M2 20c0-3 3-5 7-5s7 2 7 5"/><circle cx="17" cy="8" r="2.5"/><path d="M16 13c2.5 0 5 1.5 5 4"/></svg>
+              </div>
               <p className="stat-amount">{circles.length}</p>
               <p className="dashboard-sub">Circles</p>
             </div>
           </div>
 
-          <button
-            className="auth-switch"
-            onClick={handleLogout}
-            style={{ background: 'none', border: 'none', textDecoration: 'underline', cursor: 'pointer', marginTop: '20px' }}
-          >
-            Logout
-          </button>
+          <div className="home-logout">
+            <button
+              onClick={handleLogout}
+              style={{ background: 'none', border: 'none', textDecoration: 'underline', cursor: 'pointer', color: 'inherit', fontSize: '14px', padding: 0 }}
+            >
+              Logout
+            </button>
+          </div>
         </div>
 
         <div className="home-right">
@@ -232,20 +327,36 @@ function HomePage({ session, setSession, setPage, setCircleToOpen }) {
           <div className="circle-list" style={{ marginTop: '12px' }}>
             {circles.length > 0 ? circles.map((circle) => {
               const left = daysUntil(circle.current_cycle_due_date);
+              const percent = Math.round((circle.paidCount / circle.target_member_count) * 100);
               return (
                 <div key={circle.id} className="circle-card" onClick={() => openCircleFromHome(circle.id)} style={{ flexDirection: 'column', alignItems: 'flex-start', cursor: 'pointer' }}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%' }}>
-                    <p className="circle-card-name">{circle.name}</p>
-                    <span className="circle-card-role">{circle.hasPaid ? "You've paid" : (left !== null ? `Due in ${left} day${left === 1 ? '' : 's'}` : '')}</span>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', width: '100%', alignItems: 'flex-start' }}>
+                    <div style={{ display: 'flex', gap: '12px', alignItems: 'flex-start' }}>
+                      <div className="ajo-chip ajo-chip--purple" style={{ marginBottom: 0 }}>
+                        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="9" cy="7" r="3"/><path d="M2 20c0-3 3-5 7-5s7 2 7 5"/></svg>
+                      </div>
+                      <div>
+                        <p className="circle-card-name">{circle.name}</p>
+                        <p className="circle-card-role">
+                          {circle.target_member_count} members · ₦{circle.contribution_amount.toLocaleString()} / cycle · {cycleLabel(circle.cycle_duration_days)}
+                        </p>
+                      </div>
+                    </div>
+                    <span className={`ajo-badge ${circle.hasPaid ? 'ajo-badge--success' : ''}`}>
+                      {circle.hasPaid ? "You've paid" : 'Active'}
+                    </span>
                   </div>
-                  <p className="circle-card-role">
-                    {circle.target_member_count} members · ₦{circle.contribution_amount.toLocaleString()} / cycle · {cycleLabel(circle.cycle_duration_days)}
-                  </p>
-                  <div style={{ width: '100%', height: '6px', background: '#eee', borderRadius: '4px', marginTop: '8px' }}>
-                    <div style={{ width: `${(circle.paidCount / circle.target_member_count) * 100}%`, height: '100%', background: '#3b82f6', borderRadius: '4px' }}></div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%', marginTop: '10px' }}>
+                    <div className="ajo-progress" style={{ flex: 1 }}>
+                      <div className="ajo-progress__fill" style={{ width: `${percent}%` }}></div>
+                    </div>
+                    <span className="dashboard-sub" style={{ whiteSpace: 'nowrap' }}>{percent}%</span>
                   </div>
+
                   <p className="dashboard-sub" style={{ marginTop: '4px' }}>
                     {circle.paidCount} of {circle.target_member_count} paid · Cycle {circle.current_cycle} of {circle.target_member_count}
+                    {left !== null && !circle.hasPaid ? ` · Due in ${left} day${left === 1 ? '' : 's'}` : ''}
                   </p>
                 </div>
               );
@@ -255,6 +366,30 @@ function HomePage({ session, setSession, setPage, setCircleToOpen }) {
           </div>
         </div>
       </div>
+
+      {amountModalMode === 'fund' && (
+        <AmountModal
+          title="How much would you like to fund?"
+          onConfirm={confirmFund}
+          onCancel={() => setAmountModalMode(null)}
+        />
+      )}
+
+      {amountModalMode === 'withdraw' && (
+        <AmountModal
+          title="How much would you like to withdraw?"
+          onConfirm={confirmWithdrawAmount}
+          onCancel={() => setAmountModalMode(null)}
+        />
+      )}
+
+      {showPinModal && (
+        <PinModal
+          userId={session.user.id}
+          onSuccess={completeWithdraw}
+          onCancel={() => { setShowPinModal(false); setPendingWithdrawAmount(null); }}
+        />
+      )}
     </div>
   );
 }

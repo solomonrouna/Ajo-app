@@ -12,8 +12,8 @@ function WalletPage({ session }) {
   const [forgotPin, setForgotPin] = useState(false);
   const [showPinModal, setShowPinModal] = useState(false);
   const [pendingWithdrawAmount, setPendingWithdrawAmount] = useState(null);
-  const [amountModalMode, setAmountModalMode] = useState(null); // 'fund' | 'withdraw' | null
-  const [banner, setBanner] = useState(null); // { type: 'success' | 'error', message: string }
+  const [amountModalMode, setAmountModalMode] = useState(null);
+  const [banner, setBanner] = useState(null);
 
   useEffect(() => {
     if (!session) return;
@@ -184,7 +184,7 @@ function WalletPage({ session }) {
         </div>
       )}
 
-      <div className="passbook-entry" style={{ marginTop: '20px' }}>
+      <div className="passbook-entry ajo-hero-card" style={{ marginTop: '20px' }}>
         <p className="passbook-label">Available balance</p>
         <p className="passbook-amount">
           ₦{balance !== null ? balance.toLocaleString() : '···'}
@@ -205,7 +205,10 @@ function WalletPage({ session }) {
                 <p className="circle-card-name">{tx.description}</p>
                 <p className="circle-card-role">{new Date(tx.created_at).toLocaleString()}</p>
               </div>
-              <div style={{ color: tx.direction === 'credit' ? 'green' : '#b91c1c', fontWeight: '500' }}>
+              <div
+                className="circle-card-amount"
+                style={{ color: tx.direction === 'credit' ? 'green' : '#b91c1c' }}
+              >
                 {tx.direction === 'credit' ? '+' : '-'}₦{tx.amount.toLocaleString()}
               </div>
             </div>

@@ -2,10 +2,23 @@ import { useState,useEffect } from "react";
 import { supabase } from "./supabaseClient";
 import PinModal from "./PinModal.jsx";
 
+const backIcon = (
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+    <path d="m15 18-6-6 6-6" />
+  </svg>
+);
+const searchIcon = (
+  <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" />
+  </svg>
+);
+
 function CirclePage({ session, selectedCircle, setSelectedCircle, circleToOpen, setCircleToOpen }) {
 const [circles , setCircles] = useState([]);
 const [members, setMembers] = useState([]);
 const [inviteEmail, setInviteEmail] = useState('');
+const [emailMatch, setEmailMatch] = useState(null); // null | 'not_found' | { id, full_name }
+const [checkingEmail, setCheckingEmail] = useState(false);
 const [paidUserIds, setPaidUserIds] = useState([]);
 const [walletBalance, setWalletBalance] = useState(null);
 const [myDebts, setMyDebts] = useState([]);
@@ -41,6 +54,25 @@ useEffect(() => {
   const timer = setTimeout(() => setBanner(null), 4000);
   return () => clearTimeout(timer);
 }, [banner]);
+
+useEffect(() => {
+  const trimmed = inviteEmail.trim().toLowerCase();
+  if (!trimmed.includes('@')) {
+    setEmailMatch(null);
+    return;
+  }
+  setCheckingEmail(true);
+  const timer = setTimeout(async () => {
+    const { data } = await supabase
+      .from('profiles')
+      .select('id, full_name')
+      .eq('email', trimmed)
+      .maybeSingle();
+    setEmailMatch(data || 'not_found');
+    setCheckingEmail(false);
+  }, 400);
+  return () => clearTimeout(timer);
+}, [inviteEmail]);
 
 async function handleCreateCircle(){
     const name = prompt('Circle name ?')
@@ -336,35 +368,19 @@ async function handleDeleteMember(memberUserId){
 }
 
 async function handleInvite(){
-    const trimmedEmail = inviteEmail.trim().toLowerCase();
-
-    if (!trimmedEmail) {
-      alert('Please enter an email address');
-      return;
-    }
+    if (!emailMatch || emailMatch === 'not_found') return;
 
     if (members.length >= selectedCircle.target_member_count) {
       alert('This circle is already full');
       return;
     }
 
-    const {data:foundProfile,error} = await supabase
-    .from('profiles')
-    .select('id')
-    .eq('email', trimmedEmail)
-    .maybeSingle();
-
-    if(!foundProfile){
-      alert('Sorry we could not find a user with that email');
-      return;
-    }
-
-    if (foundProfile.id === session.user.id) {
+    if (emailMatch.id === session.user.id) {
       alert("You can't invite yourself");
       return;
     }
 
-    const isAlreadyMember = members.some((m) => m.user_id === foundProfile.id);
+    const isAlreadyMember = members.some((m) => m.user_id === emailMatch.id);
     if (isAlreadyMember) {
       alert('This user is already a member of this circle');
       return;
@@ -374,7 +390,7 @@ async function handleInvite(){
     .from('circle_invites')
     .select('id')
     .eq('circle_id', selectedCircle.id)
-    .eq('invited_user_id', foundProfile.id)
+    .eq('invited_user_id', emailMatch.id)
     .eq('status', 'pending')
     .maybeSingle();
 
@@ -387,7 +403,7 @@ async function handleInvite(){
     .from('circle_invites')
     .insert({
       circle_id: selectedCircle.id,
-      invited_user_id: foundProfile.id,
+      invited_user_id: emailMatch.id,
       invited_by: session.user.id
     });
 
@@ -399,6 +415,7 @@ async function handleInvite(){
 
     alert('Invite sent!');
     setInviteEmail('');
+    setEmailMatch(null);
 }
 
 async function fetchContributions(circleId, cycleNumber) {
@@ -523,11 +540,18 @@ async function handlePayContribution(){
   checkAndTriggerPayouts(selectedCircle.id, selectedCircle.current_cycle);
 }
 
+const nextCollectorName = selectedCircle && members.length
+  ? members.find((m) => m.payout_position === ((selectedCircle.current_cycle - 1) % members.length) + 1)?.full_name || '—'
+  : '—';
+
 return (
   <div className="dashboard">
     {selectedCircle ? (
       <div>
-        <button onClick={() => setSelectedCircle(null)}>&larr; Back</button>
+        <button className="detail-back" onClick={() => setSelectedCircle(null)}>
+          {backIcon} Back to circles
+        </button>
+
         {selectedCircle.created_by === session.user.id && (
           <button
             onClick={handleDeleteCircle}
@@ -550,12 +574,13 @@ return (
           </div>
         )}
 
-        <h1 className="dashboard-greeting">{selectedCircle.name}</h1>
-        <p className="dashboard-sub">₦{selectedCircle.contribution_amount.toLocaleString()} per cycle</p>
-        <p className="dashboard-sub">{members.length} of {selectedCircle.target_member_count} members</p>
-        {selectedCircle.current_cycle_due_date && (
-          <p className="dashboard-sub">Due: {new Date(selectedCircle.current_cycle_due_date).toLocaleDateString()}</p>
-        )}
+        <div className="page-head" style={{ marginTop: '14px' }}>
+          <h1 className="page-title">{selectedCircle.name}</h1>
+          <p className="page-sub">
+            ₦{selectedCircle.contribution_amount.toLocaleString()} per cycle · {members.length} of {selectedCircle.target_member_count} members
+            {selectedCircle.current_cycle_due_date && ` · Due ${new Date(selectedCircle.current_cycle_due_date).toLocaleDateString()}`}
+          </p>
+        </div>
 
         {myDebts.length > 0 && (
           <div style={{ marginTop: '16px', padding: '12px', background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: '8px' }}>
@@ -574,116 +599,85 @@ return (
           </div>
         )}
 
-        {members.length >= selectedCircle.target_member_count && (
-          <div style={{ position: 'relative', width: '260px', height: '260px', margin: '30px auto' }}>
-            {members.map((member, i) => {
-              const angle = (i / members.length) * 2 * Math.PI - Math.PI / 2;
-              const radius = 100;
-              const center = 130;
-              const x = center + radius * Math.cos(angle) - 22;
-              const y = center + radius * Math.sin(angle) - 22;
-
-              const position = ((selectedCircle.current_cycle - 1) % members.length) + 1;
-              const isCollector = member.payout_position === position;
-              const hasPaid = paidUserIds.includes(member.user_id);
-
-              return (
-                <div
-                  key={member.user_id}
-                  style={{
-                    position: 'absolute',
-                    left: `${x}px`,
-                    top: `${y}px`,
-                    width: '44px',
-                    height: '44px',
-                    borderRadius: '50%',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    fontSize: '14px',
-                    fontWeight: '500',
-                    background: isCollector ? '#dbeafe' : '#f3f4f6',
-                    color: isCollector ? '#1d4ed8' : '#333',
-                    border: isCollector ? '2px solid #3b82f6' : '1px solid #ccc'
-                  }}
-                >
-                  {member.full_name.slice(0, 2).toUpperCase()}
-                  <div style={{
-                    position: 'absolute',
-                    bottom: '-2px',
-                    right: '-2px',
-                    width: '12px',
-                    height: '12px',
-                    borderRadius: '50%',
-                    background: hasPaid ? 'green' : '#fff',
-                    border: '2px solid #fff'
-                  }} />
-                </div>
-              );
-            })}
-            <div style={{
-              position: 'absolute',
-              top: '50%',
-              left: '50%',
-              transform: 'translate(-50%, -50%)',
-              textAlign: 'center',
-              width: '140px'
-            }}>
-              <p style={{ fontSize: '12px', color: '#666', margin: 0 }}>Next to collect</p>
-              <p style={{ fontSize: '18px', fontWeight: '500', margin: '4px 0 0' }}>
-                {members.find((m) => m.payout_position === ((selectedCircle.current_cycle - 1) % members.length) + 1)?.full_name || '—'}
-              </p>
-            </div>
+        {members.length >= selectedCircle.target_member_count ? (
+          <div className="collect-card">
+            <p className="collect-label">Next to collect</p>
+            <p className="collect-name">{nextCollectorName}</p>
+            <div className="avatar-lg">{nextCollectorName.slice(0, 2).toUpperCase()}</div>
+            <button
+              className="btn-primary"
+              style={{ width: '100%' }}
+              onClick={handlePayContribution}
+              disabled={paidUserIds.includes(session.user.id)}
+            >
+              {paidUserIds.includes(session.user.id) ? 'Already Paid' : `Pay ₦${selectedCircle.contribution_amount.toLocaleString()}`}
+            </button>
           </div>
-        )}
-
-        {members.length < selectedCircle.target_member_count ? (
-          <p style={{ marginTop: '20px', color: '#999' }}>Waiting for more members to join before payments can start.</p>
         ) : (
-          <button
-            className="auth-button"
-            style={{ marginTop: '20px' }}
-            onClick={handlePayContribution}
-            disabled={paidUserIds.includes(session.user.id)}
-          >
-            {paidUserIds.includes(session.user.id) ? 'Already Paid' : `Pay ₦${selectedCircle.contribution_amount.toLocaleString()} from wallet`}
-          </button>
+          <p className="dashboard-sub" style={{ marginTop: '20px' }}>
+            Waiting for more members to join before payments can start.
+          </p>
         )}
 
-        <div className="circle-list" style={{ marginTop: '20px' }}>
-          {members.map((member, index) => (
-            <div key={member.user_id} className="circle-card">
-              <div>
-                <p className="circle-card-name">{member.full_name}{member.user_id === session.user.id ? ' (You)' : ''}</p>
-                <p className="circle-card-role">{member.role}</p>
-                <p style={{ color: paidUserIds.includes(member.user_id) ? 'green' : '#999', fontSize: '13px' }}>
-                  {paidUserIds.includes(member.user_id) ? 'Paid' : 'Not Paid'}
-                </p>
+        <div className="section-head" style={{ marginTop: '28px' }}>
+          <h3 className="section-title">Members</h3>
+        </div>
+
+        {selectedCircle.created_by === session.user.id && (
+          <>
+            <div className="member-search">
+              {searchIcon}
+              <input
+                type="email"
+                placeholder="Enter an email to invite"
+                value={inviteEmail}
+                onChange={(e) => setInviteEmail(e.target.value)}
+              />
+              <button
+                className="member-search-btn"
+                onClick={handleInvite}
+                disabled={!emailMatch || emailMatch === 'not_found'}
+              >
+                Invite
+              </button>
+            </div>
+            <p className="member-search-hint">
+              {checkingEmail
+                ? 'Searching…'
+                : emailMatch === 'not_found'
+                  ? 'No user found with that email.'
+                  : emailMatch
+                    ? `Send an invite to ${emailMatch.full_name}`
+                    : 'Name search is coming soon — email works for now'}
+            </p>
+            {!checkingEmail && emailMatch && emailMatch !== 'not_found' && (
+              <div className="member-match-row">
+                <span className="member-avatar">{emailMatch.full_name.slice(0, 2).toUpperCase()}</span>
+                <div className="member-info">
+                  <p className="member-name">{emailMatch.full_name}</p>
+                </div>
               </div>
+            )}
+          </>
+        )}
+
+        <div className="member-list">
+          {members.map((member) => (
+            <div key={member.user_id} className="member-row">
+              <span className="member-avatar">{member.full_name.slice(0, 2).toUpperCase()}</span>
+              <div className="member-info">
+                <p className="member-name">{member.full_name}{member.user_id === session.user.id ? ' (You)' : ''}</p>
+                <p className="member-role">{member.role}</p>
+              </div>
+              <span className={`member-status ${paidUserIds.includes(member.user_id) ? 'member-status--paid' : 'member-status--pending'}`}>
+                {paidUserIds.includes(member.user_id) ? 'Paid' : 'Pending'}
+              </span>
               {selectedCircle.created_by === session.user.id && member.role !== 'creator' && (
-                <button
-                  onClick={() => handleDeleteMember(member.user_id)}
-                  style={{ color: 'red', background: 'none', border: '1px solid red', borderRadius: '6px', padding: '4px 10px', cursor: 'pointer' }}
-                >
-                  Remove
-                </button>
+                <button className="member-remove" onClick={() => handleDeleteMember(member.user_id)}>Remove</button>
               )}
             </div>
           ))}
         </div>
-
-        {selectedCircle.created_by === session.user.id && (
-        <div style={{ marginTop: '21px' }}>
-          <input
-          className="auth-input"
-            type="email"
-            placeholder="Invite member by email"
-            value={inviteEmail}
-            onChange={(e) => setInviteEmail(e.target.value)}
-          />
-          <button className ="auth-button" onClick ={handleInvite}>Invite</button>
-        </div>
-        )}
       </div>
     ) : (
       <>

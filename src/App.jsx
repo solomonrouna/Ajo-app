@@ -25,6 +25,13 @@ import AuditPage from './AuditPage.jsx'
     })
   }, [])
 
+  function goToPage(pageId) {
+    if (pageId === 'circle') {
+      setSelectedCircle(null);
+    }
+    setPage(pageId);
+  }
+
  async function handleSignup() {
     const { data, error } = await supabase.auth.signUp({
       email: email,
@@ -47,7 +54,7 @@ import AuditPage from './AuditPage.jsx'
 return (
   <div className="App">
     {session ? (
-     <Layout page={page} setPage={setPage}>
+     <Layout page={page} setPage={goToPage}>
   {page === 'circle' ? (
     <CirclePage
       session={session}
