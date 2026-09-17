@@ -1,5 +1,3 @@
-@import url('https://fonts.googleapis.com/css2?family=Sora:wght@400;600;700;800&family=Inter:wght@400;500;600;700&display=swap');
-
 :root {
   --cobalt: #2563EB;
   --cobalt-dark: #1D4ED8;
@@ -30,7 +28,12 @@
 }
 
 * { box-sizing: border-box; }
-html, body { height: 100%; }
+
+html, body {
+  height: 100%;
+  overflow-x: clip;
+  max-width: 100%;
+}
 
 body {
   margin: 0;
@@ -238,6 +241,19 @@ button { font-family: inherit; }
 }
 
 /* ============================================================
+   STICKY WALLET CARD (used on Home + Wallet pages)
+   ============================================================ */
+.wallet-sticky-card {
+  position: sticky;
+  top: 0;
+  z-index: 8;
+  background: var(--paper);
+}
+.wallet-sticky-card .passbook-entry {
+  margin-top: 0;
+}
+
+/* ============================================================
    STAT CARDS
    ============================================================ */
 .stat-row { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
@@ -381,7 +397,7 @@ button { font-family: inherit; }
 .empty-state p { font-size: 13px; color: var(--muted); margin: 0 0 16px; }
 
 /* ============================================================
-   INVITE BAR — input + button as one row instead of stacked
+   INVITE BAR
    ============================================================ */
 .invite-bar { display: flex; gap: 10px; margin-top: 21px; align-items: center; }
 .invite-bar .auth-input { flex: 1; margin-bottom: 0; }
@@ -472,7 +488,18 @@ button { font-family: inherit; }
     margin-top: auto; padding: 18px 12px 4px;
     border-top: 1px solid var(--line);
   }
-  .ajo-plant-panel img, .ajo-plant-panel svg { display: none; }
+
+
+.ajo-plant-panel svg {
+  width: 40px;
+  height: 40px;
+  margin: 0 auto 10px;
+  display: block;
+  color: var(--cobalt);
+  opacity: 0.85;
+}
+
+
   .ajo-plant-panel h4 {
     margin: 0 0 4px; font-family: 'Sora', sans-serif;
     font-size: 13.5px; font-weight: 700; line-height: 1.35;
@@ -598,3 +625,59 @@ button { font-family: inherit; }
   background: var(--cobalt); color: #fff;
   padding: 8px 14px; border-radius: 999px; font-size: 12.5px; font-weight: 600;
 }
+
+
+/* ============================================================
+   ALWAYS-VISIBLE STICKY SUMMARY (Home + Wallet)
+   ============================================================ */
+.sticky-summary {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  background: var(--paper);
+  padding: 14px 0 12px;
+  margin-bottom: 4px;
+  border-bottom: 1px solid var(--line);
+}
+.sticky-summary-greeting {
+  font-family: 'Sora', sans-serif;
+  font-weight: 700;
+  font-size: 15px;
+  margin: 0 0 10px;
+}
+.sticky-summary-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.sticky-summary-label {
+  font-size: 12px;
+  color: var(--muted);
+  margin: 0 0 2px;
+}
+.sticky-summary-amount {
+  font-family: 'Sora', sans-serif;
+  font-weight: 800;
+  font-size: 24px;
+  margin: 0;
+  letter-spacing: -0.01em;
+}
+.sticky-summary-actions {
+  display: flex;
+  gap: 8px;
+  flex-shrink: 0;
+}
+.sticky-summary-actions button {
+  padding: 9px 16px;
+  border-radius: var(--r-sm);
+  font-weight: 600;
+  font-size: 13.5px;
+  border: 1px solid transparent;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.sticky-summary-actions .primary { background: var(--cobalt); color: #fff; }
+.sticky-summary-actions .primary:hover { background: var(--cobalt-dark); }
+.sticky-summary-actions .secondary { background: #fff; color: var(--cobalt); border-color: #C7D9F8; }

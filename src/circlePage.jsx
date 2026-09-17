@@ -12,6 +12,12 @@ const searchIcon = (
     <circle cx="11" cy="11" r="7" /><path d="m20 20-3.5-3.5" />
   </svg>
 );
+const usersIcon = (
+  <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+    <path d="M16 19v-1a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v1" /><circle cx="9" cy="7" r="3" />
+    <path d="M22 19v-1a4 4 0 0 0-3-3.87M16 4.13a4 4 0 0 1 0 7.75" />
+  </svg>
+);
 
 function CirclePage({ session, selectedCircle, setSelectedCircle, circleToOpen, setCircleToOpen }) {
 const [circles , setCircles] = useState([]);
@@ -681,10 +687,12 @@ return (
       </div>
     ) : (
       <>
-        <h1 className="dashboard-greeting">Circles</h1>
-        <p className="dashboard-sub">This is where your circles will live.</p>
-        <button className="auth-button" onClick={handleCreateCircle}>
-          + Create Circle
+        <div className="page-head">
+          <h1 className="page-title">Circles</h1>
+          <p className="page-sub">Every circle you've joined or created.</p>
+        </div>
+        <button className="btn-primary" style={{ width: '100%', marginBottom: '16px' }} onClick={handleCreateCircle}>
+          + Create circle
         </button>
         <div className="circle-list">
           {circles.map((item) => (
@@ -693,13 +701,18 @@ return (
               className="circle-card"
               onClick={() => openCircle(item.circles.id)}
             >
-              <div>
+              <span className="ajo-chip ajo-chip--purple">{usersIcon}</span>
+              <div className="circle-main">
                 <p className="circle-card-name">{item.circles.name}</p>
-                <p className="circle-card-role">{item.role}</p>
+                <div className="circle-card-meta">
+                  <span className="circle-card-role">{item.role}</span>
+                  <span className="circle-card-amount">₦{item.circles.contribution_amount.toLocaleString()} / cycle</span>
+                  <span>{item.circles.target_member_count} members</span>
+                </div>
               </div>
-              <div className="circle-card-amount">
-                ₦{item.circles.contribution_amount.toLocaleString()}
-              </div>
+              <span className={`ajo-badge${item.role === 'creator' ? '' : ' ajo-badge--muted'}`}>
+                {item.role === 'creator' ? 'Creator' : 'Member'}
+              </span>
             </div>
           ))}
         </div>

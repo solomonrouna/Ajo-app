@@ -169,11 +169,24 @@ function WalletPage({ session }) {
 
   return (
     <div className="dashboard">
-      <h1 className="dashboard-greeting">Wallet</h1>
+      <div className="sticky-summary">
+        <p className="sticky-summary-greeting">Wallet</p>
+        <div className="sticky-summary-row">
+          <div>
+            <p className="sticky-summary-label">Available balance</p>
+            <p className="sticky-summary-amount">₦{balance !== null ? balance.toLocaleString() : '···'}</p>
+          </div>
+          <div className="sticky-summary-actions">
+            <button className="primary" onClick={() => setAmountModalMode('fund')}>+ Fund</button>
+            <button className="secondary" onClick={() => setAmountModalMode('withdraw')}>Withdraw</button>
+          </div>
+        </div>
+      </div>
 
       {banner && (
         <div style={{
           marginTop: '12px',
+          marginBottom: '4px',
           padding: '12px 16px',
           borderRadius: '10px',
           background: banner.type === 'success' ? '#ecfdf5' : '#fef2f2',
@@ -184,18 +197,7 @@ function WalletPage({ session }) {
         </div>
       )}
 
-      <div className="passbook-entry ajo-hero-card" style={{ marginTop: '20px' }}>
-        <p className="passbook-label">Available balance</p>
-        <p className="passbook-amount">
-          ₦{balance !== null ? balance.toLocaleString() : '···'}
-        </p>
-        <div className="passbook-actions">
-          <button className="passbook-action primary" onClick={() => setAmountModalMode('fund')}>+ Fund wallet</button>
-          <button className="passbook-action secondary" onClick={() => setAmountModalMode('withdraw')}>Withdraw</button>
-        </div>
-      </div>
-
-      <p style={{ fontWeight: '500', marginTop: '24px' }}>Statement</p>
+      <p style={{ fontWeight: '500', marginTop: '20px' }}>Statement</p>
 
       <div className="circle-list" style={{ marginTop: '12px' }}>
         {transactions.length > 0 ? (
