@@ -7,6 +7,7 @@ import './App.css'
 import Layout from './Layout.jsx'
 import CirclePage from './circlePage.jsx'
 import AuditPage from './AuditPage.jsx'
+import ResetPasswordPage from './ResetPasswordPage.jsx'
 
   function App() {
   const [email, setEmail] = useState('')
@@ -17,6 +18,8 @@ import AuditPage from './AuditPage.jsx'
   const [loading, setLoading] = useState(true)
   const [selectedCircle, setSelectedCircle] = useState(null)
   const [circleToOpen, setCircleToOpen] = useState(null)
+  const [signupError, setSignupError] = useState(null)
+  const [signupLoading, setSignupLoading] = useState(false)
 
   useEffect(() => {
      supabase.auth.getSession().then(({ data: { session } }) => {
@@ -33,6 +36,20 @@ import AuditPage from './AuditPage.jsx'
   }
 
  async function handleSignup() {
+    setSignupError(null)
+
+    if (!email || !password || !fullName) {
+      setSignupError('Please fill in all fields.')
+      return
+    }
+
+    if (password.length < 6) {
+      setSignupError('Password must be at least 6 characters.')
+      return
+    }
+
+    setSignupLoading(true)
+
     const { data, error } = await supabase.auth.signUp({
       email: email,
       password: password,
@@ -43,13 +60,25 @@ import AuditPage from './AuditPage.jsx'
       }
     })
 
-    if (error) {
-      console.error('Error signing up:', error.message)
-    } else {
-      console.log('signed up successfully:', data)
-      setSession(data.session)
+   if(error){
+    console.log('Error signing up:', error.message)
+    if(error.message.includes('already registered')) {
+      setSignupError('You already have an account. Please log in instead.');
+    }else{
+      setSignupError('Something went wrong. Please try again later.');
     }
+   } else {
+    console.log('signed up successfully:', data)
+    setSession(data.session)
+   }
+
+    setSignupLoading(false)
  }
+
+  if (window.location.pathname === '/reset-password') {
+    return <ResetPasswordPage />
+  }
+
    if (loading)  return null
 return (
   <div className="App">
@@ -106,7 +135,14 @@ return (
             value={fullName}
             onChange={(e) => setFullName(e.target.value)}
           />
-          <button className="auth-button" onClick={handleSignup}>Sign Up</button>
+          {signupError && (
+            <p style={{ color: '#e53935', fontSize: '14px', marginTop: '-8px', marginBottom: '12px' }}>
+              {signupError}
+            </p>
+          )}
+          <button className="auth-button" onClick={handleSignup} disabled={signupLoading}>
+            {signupLoading ? 'Signing up...' : 'Sign Up'}
+          </button>
           <div className="auth-switch">
             Already have an account? <button onClick={() => setPage('login')}>Log in</button>
           </div>
