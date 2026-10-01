@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { supabase } from './supabaseClient.js';
-import PinModal from './PinModal.jsx';
 import AmountModal from './AmountModal.jsx';
+import WithdrawModal from './WithdrawModal.jsx';
 
 const walletIcon = (
   <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -33,9 +33,8 @@ function HomePage({ session, setSession, setPage, setCircleToOpen }) {
   const [fullName, setFullName] = useState(null);
   const [invites, setInvites] = useState([]);
   const [showInvites, setShowInvites] = useState(false);
-  const [amountModalMode, setAmountModalMode] = useState(null);
-  const [showPinModal, setShowPinModal] = useState(false);
-  const [pendingWithdrawAmount, setPendingWithdrawAmount] = useState(null);
+  const [showFund, setShowFund] = useState(false);
+  const [showWithdraw, setShowWithdraw] = useState(false);
   const [banner, setBanner] = useState(null);
   const [showPeek, setShowPeek] = useState(false);
   const heroRef = useRef(null);
@@ -106,52 +105,15 @@ function HomePage({ session, setSession, setPage, setCircleToOpen }) {
   }
 
   async function respondToInvite(inviteId, circleId, accept) {
-    if (accept) {
-      const { count } = await supabase
-        .from('circle_members')
-        .select('*', { count: 'exact', head: true })
-        .eq('circle_id', circleId);
+    const { error } = await supabase.rpc('accept_circle_invite', {
+      p_invite_id: inviteId,
+      p_accept: accept
+    });
 
-      const { data: circleData, error: circleError } = await supabase
-        .from('circles')
-        .select('target_member_count')
-        .eq('id', circleId)
-        .maybeSingle();
-
-      if (circleError || !circleData) {
-        console.log('error fetching circle for invite', circleError?.message);
-        alert('Could not process this invite. Please try again.');
-        return;
-      }
-
-      if (count >= circleData.target_member_count) {
-        alert('This circle is already full. You cannot join.');
-        return;
-      }
-
-      const { error: memberError } = await supabase
-        .from('circle_members')
-        .insert({
-          circle_id: circleId,
-          user_id: session.user.id,
-          role: 'member',
-          payout_position: (count || 0) + 1
-        });
-
-      if (memberError) {
-        console.log('error joining circle', memberError.message);
-        alert('Could not join circle. Please try again.');
-        return;
-      }
-    }
-
-    const { error: updateError } = await supabase
-      .from('circle_invites')
-      .update({ status: accept ? 'accepted' : 'declined' })
-      .eq('id', inviteId);
-
-    if (updateError) {
-      console.log('error updating invite', updateError.message);
+    if (error) {
+      console.log('error answering invite', error.message);
+      alert(error.message);
+      fetchInvites();
       return;
     }
 
@@ -233,50 +195,39 @@ function HomePage({ session, setSession, setPage, setCircleToOpen }) {
   }
 
   async function confirmFund(amount) {
-    setAmountModalMode(null);
-    const { error } = await supabase.rpc('add_ledger_entry', {
-      p_wallet_id: session.user.id,
-      p_amount: amount,
-      p_direction: 'credit',
-      p_description: 'Wallet funding'
+    setShowFund(false);
+
+    if (!Number.isInteger(amount)) {
+      setBanner({ type: 'error', message: 'Please enter a whole amount in naira.' });
+      return;
+    }
+
+    const { data, error } = await supabase.functions.invoke('fund-initialize', {
+      body: { amount },
     });
 
     if (error) {
-      console.log('Error funding wallet', error.message);
-      setBanner({ type: 'error', message: 'Could not fund wallet. Please try again.' });
-    } else {
-      setBanner({ type: 'success', message: `₦${amount.toLocaleString()} added to your wallet.` });
-      fetchBalance();
-      fetchCirclesWithProgress();
+      let message = 'Could not start payment. Please try again.';
+      try {
+        const details = await error.context.json();
+        if (details?.error) message = details.error;
+      } catch {
+        // keep the default message
+      }
+      setBanner({ type: 'error', message });
+      return;
     }
+
+    window.location.href = data.authorization_url;
   }
 
-  function confirmWithdrawAmount(amount) {
-    setAmountModalMode(null);
-    setPendingWithdrawAmount(amount);
-    setShowPinModal(true);
-  }
-
-  async function completeWithdraw() {
-    setShowPinModal(false);
-    const { error } = await supabase.rpc('add_ledger_entry', {
-      p_wallet_id: session.user.id,
-      p_amount: pendingWithdrawAmount,
-      p_direction: 'debit',
-      p_description: 'Wallet withdrawn'
+  function handleWithdrawDone(result) {
+    setShowWithdraw(false);
+    setBanner({
+      type: 'success',
+      message: `₦${Number(result?.receive ?? 0).toLocaleString()} is on its way to your bank.`
     });
-
-    if (error) {
-      console.log('Error withdrawing', error.message);
-      setBanner({
-        type: 'error',
-        message: error.message.includes('Insufficient') ? 'Insufficient balance.' : 'Withdrawal failed.'
-      });
-    } else {
-      setBanner({ type: 'success', message: `₦${pendingWithdrawAmount.toLocaleString()} withdrawn.` });
-      fetchBalance();
-    }
-    setPendingWithdrawAmount(null);
+    fetchBalance();
   }
 
   const displayName = fullName || session.user.email?.split('@')[0] || 'there';
@@ -334,7 +285,7 @@ function HomePage({ session, setSession, setPage, setCircleToOpen }) {
         <span className="balance-peek-amount">₦{balance !== null ? balance.toLocaleString() : '···'}</span>
         <button
           className="balance-peek-action"
-          onClick={() => setAmountModalMode('fund')}
+          onClick={() => setShowFund(true)}
           tabIndex={showPeek ? 0 : -1}
         >
           Fund
@@ -370,8 +321,8 @@ function HomePage({ session, setSession, setPage, setCircleToOpen }) {
             </div>
           </div>
           <div className="passbook-actions">
-            <button className="passbook-action primary" onClick={() => setAmountModalMode('fund')}>+ Fund wallet</button>
-            <button className="passbook-action secondary" onClick={() => setAmountModalMode('withdraw')}>Withdraw</button>
+            <button className="passbook-action primary" onClick={() => setShowFund(true)}>+ Fund wallet</button>
+            <button className="passbook-action secondary" onClick={() => setShowWithdraw(true)}>Withdraw</button>
           </div>
         </div>
       </div>
@@ -441,27 +392,18 @@ function HomePage({ session, setSession, setPage, setCircleToOpen }) {
 
       <button className="home-logout" onClick={handleLogout}>Logout</button>
 
-      {amountModalMode === 'fund' && (
+      {showFund && (
         <AmountModal
           title="How much would you like to fund?"
           onConfirm={confirmFund}
-          onCancel={() => setAmountModalMode(null)}
+          onCancel={() => setShowFund(false)}
         />
       )}
 
-      {amountModalMode === 'withdraw' && (
-        <AmountModal
-          title="How much would you like to withdraw?"
-          onConfirm={confirmWithdrawAmount}
-          onCancel={() => setAmountModalMode(null)}
-        />
-      )}
-
-      {showPinModal && (
-        <PinModal
-          userId={session.user.id}
-          onSuccess={completeWithdraw}
-          onCancel={() => { setShowPinModal(false); setPendingWithdrawAmount(null); }}
+      {showWithdraw && (
+        <WithdrawModal
+          onDone={handleWithdrawDone}
+          onCancel={() => setShowWithdraw(false)}
         />
       )}
     </div>

@@ -1,4 +1,4 @@
-import { useState,useEffect } from "react";
+import { useState, useEffect } from "react";
 import { supabase } from "./supabaseClient";
 import PinModal from "./PinModal.jsx";
 
@@ -69,63 +69,59 @@ useEffect(() => {
   }
   setCheckingEmail(true);
   const timer = setTimeout(async () => {
-    const { data } = await supabase
-      .from('profiles')
-      .select('id, full_name')
-      .eq('email', trimmed)
-      .maybeSingle();
-    setEmailMatch(data || 'not_found');
+    const { data } = await supabase.rpc('find_user_by_email', { p_email: trimmed });
+    setEmailMatch(data && data.length > 0 ? data[0] : 'not_found');
     setCheckingEmail(false);
   }, 400);
   return () => clearTimeout(timer);
 }, [inviteEmail]);
 
 async function handleCreateCircle(){
-    const name = prompt('Circle name ?')
-    if (!name)return;
-
-    const amount = prompt ('Contribution amount per circle?');
-    if(!amount)return
-
-    const targetCount = prompt('How many members will this circle have?');
-    if(!targetCount)return
-
-    const durationDays = prompt('How many days per cycle? (e.g. 7 for weekly, 30 for monthly)');
-    if(!durationDays)return
-
-    const {data,error} = await supabase
-    .from('circles')
-    .insert({
-        name :name,
-        contribution_amount:Number(amount),
-        created_by:session.user.id,
-        target_member_count: Number(targetCount),
-        cycle_duration_days: Number(durationDays),
-        current_cycle_due_date: new Date(Date.now() + Number(durationDays) * 24 * 60 * 60 * 1000).toISOString()
-    })
-    .select()
-    .single();
-
-    if (error){
-        console.log ('Error creating circle',error.message);
-        return;
+    const name = prompt('Circle name?');
+    if (name === null) return;
+    if (!name.trim()) {
+      alert('Please enter a circle name.');
+      return;
     }
 
-    const {error:memberError}= await supabase
-    .from('circle_members')
-    .insert({
-        circle_id:data.id,
-        user_id :session.user.id,
-        role:   'creator',
-        payout_position:1,
-    })
-
-    if (memberError) {
-      console.log('could not create row')
-    } else {
-      console.log('circle created')
-      fetchCircles()
+    const rawAmount = prompt('Contribution amount per cycle (whole naira)?');
+    if (rawAmount === null) return;
+    const amount = Number(rawAmount);
+    if (!Number.isInteger(amount) || amount <= 0) {
+      alert('Please enter a whole amount above zero.');
+      return;
     }
+
+    const rawSize = prompt('How many members will this circle have? (2 or more)');
+    if (rawSize === null) return;
+    const size = Number(rawSize);
+    if (!Number.isInteger(size) || size < 2) {
+      alert('A circle needs at least 2 members.');
+      return;
+    }
+
+    const rawDays = prompt('How many days per cycle? (1 or more, e.g. 7 for weekly, 30 for monthly)');
+    if (rawDays === null) return;
+    const days = Number(rawDays);
+    if (!Number.isInteger(days) || days < 1) {
+      alert('A cycle must be at least 1 day.');
+      return;
+    }
+
+    const { error } = await supabase.rpc('create_circle', {
+      p_name: name.trim(),
+      p_amount: amount,
+      p_size: size,
+      p_days: days
+    });
+
+    if (error) {
+      console.log('Error creating circle', error.message);
+      alert(error.message);
+      return;
+    }
+
+    fetchCircles();
 }
 
 async function handleDeleteCircle(){
@@ -150,7 +146,8 @@ async function handleDeleteCircle(){
 
   if (error) {
     console.log('error deleting circle', error.message);
-    alert('Could not delete circle');
+        const known = ['unsettled', 'has started'].some((p) => error.message.includes(p));
+    alert(known ? error.message : 'Could not delete circle');
     return;
   }
 
@@ -164,9 +161,8 @@ function fetchCircles() {
     .select('role, circles(id, name, contribution_amount, created_by, current_cycle, target_member_count, cycle_duration_days, current_cycle_due_date)')
     .eq('user_id', session.user.id)
     .then(({ data, error }) => {
-      console.log('fetch result:', data, error);
       if (data) {
-        setCircles(data);
+        setCircles(data.filter((item) => item.circles !== null));
       }
     });
 }
@@ -216,141 +212,46 @@ async function completeSettleDebt() {
   setPendingDebt(null);
 }
 
-async function checkForMissedPayments(circle) {
-  if (!circle.current_cycle_due_date) return;
-
-  const isOverdue = new Date() > new Date(circle.current_cycle_due_date);
-  if (!isOverdue) return;
-
-  if (circle.missed_payments_processed_cycle === circle.current_cycle) {
-    return;
-  }
-
-  const { data: memberRows } = await supabase
-    .from('circle_members')
-    .select('user_id, payout_position')
-    .eq('circle_id', circle.id);
-
-  const { data: paidRows } = await supabase
-    .from('contributions')
-    .select('user_id')
-    .eq('circle_id', circle.id)
-    .eq('cycle_number', circle.current_cycle);
-
-  const paidIds = (paidRows || []).map((r) => r.user_id);
-  const missedMembers = (memberRows || []).filter((m) => !paidIds.includes(m.user_id));
-
-  if (missedMembers.length === 0) {
-    return;
-  }
-
-  const position = ((circle.current_cycle - 1) % memberRows.length) + 1;
-  const collector = memberRows.find((m) => m.payout_position === position);
-
-  if (!collector) {
-    console.log('no collector found, cannot process missed payments');
-    return;
-  }
-
-  for (const missed of missedMembers) {
-    if (missed.user_id === collector.user_id) continue;
-
-    const { error: debtInsertError } = await supabase.from('debts').insert({
-      circle_id: circle.id,
-      debtor_id: missed.user_id,
-      creditor_id: collector.user_id,
-      cycle_number: circle.current_cycle,
-      amount: circle.contribution_amount,
-      status: 'outstanding'
-    });
-
-    if (debtInsertError) {
-      console.log('FAILED to insert debt:', debtInsertError.message);
-      continue;
-    }
-
-    await supabase.from('audit_log').insert({
-      circle_id: circle.id,
-      actor_id: null,
-      action_type: 'debt_created',
-      target_id: missed.user_id,
-      details: { amount: circle.contribution_amount, cycle_number: circle.current_cycle }
-    });
-  }
-
-  await supabase
-    .from('circles')
-    .update({ missed_payments_processed_cycle: circle.current_cycle })
-    .eq('id', circle.id);
-
-  checkAndTriggerPayouts(circle.id, circle.current_cycle, true);
-
-  console.log('missed payments processed for cycle', circle.current_cycle);
-}
-
 async function openCircle(circleId) {
   const { data: freshCircle, error } = await supabase
     .from('circles')
-    .select('id, name, contribution_amount, created_by, current_cycle, target_member_count, cycle_duration_days, current_cycle_due_date, missed_payments_processed_cycle')
+    .select('id, name, contribution_amount, created_by, current_cycle, target_member_count, cycle_duration_days, current_cycle_due_date')
     .eq('id', circleId)
     .single();
 
   if (error) {
     console.log('error fetching fresh circle', error.message);
-    return;
+    return null;
   }
 
   setSelectedCircle(freshCircle);
-  checkForMissedPayments(freshCircle);
   fetchMembers(freshCircle.id);
   fetchContributions(freshCircle.id, freshCircle.current_cycle);
   fetchMyDebts(freshCircle.id);
+  return freshCircle;
 }
 
 async function fetchMembers(circleId) {
-  const { data: memberRows, error } = await supabase
-    .from('circle_members')
-    .select('role, user_id, payout_position')
-    .eq('circle_id', circleId);
+  const { data, error } = await supabase.rpc('get_circle_members', { p_circle_id: circleId });
 
   if (error) {
     console.log('error fetching members', error.message);
     return;
   }
 
-  const { data: profileRows, error: profileError } = await supabase
-    .from('profiles')
-    .select('id, full_name')
-    .in('id', memberRows.map((m) => m.user_id));
-
-  if (profileError) {
-    console.log('error fetching profiles', profileError.message);
-    return;
-  }
-
-  const combined = memberRows.map((member) => {
-    const profile = profileRows.find((p) => p.id === member.user_id);
-    return {
-      role: member.role,
-      full_name: profile ? profile.full_name : 'Unknown',
-      user_id: member.user_id,
-      payout_position: member.payout_position
-    };
-  });
-
-  setMembers(combined);
+  setMembers(data || []);
 }
 
 async function handleDeleteMember(memberUserId){
-  const { data: owedDebts } = await supabase
+  const { data: openDebts } = await supabase
     .from('debts')
     .select('id')
     .eq('circle_id', selectedCircle.id)
-    .eq('creditor_id', memberUserId)
-    .eq('status', 'outstanding');
+    .eq('status', 'outstanding')
+    .or(`creditor_id.eq.${memberUserId},debtor_id.eq.${memberUserId}`);
 
-  if (owedDebts && owedDebts.length > 0) {
-    alert('This member is owed money by someone in the circle. They must be paid before removal.');
+  if (openDebts && openDebts.length > 0) {
+    alert('This member has unsettled debts in this circle and cannot be removed yet.');
     return;
   }
 
@@ -365,7 +266,8 @@ async function handleDeleteMember(memberUserId){
 
   if (error) {
     console.log('error deleting member', error.message);
-    alert('Could not remove member');
+      const known = ['unsettled', 'once the circle has started'].some((p) => error.message.includes(p));
+    alert(known ? error.message : 'Could not remove member');
     return;
   }
 
@@ -436,89 +338,15 @@ async function fetchContributions(circleId, cycleNumber) {
   }
 }
 
-async function checkAndTriggerPayouts(circleId, cycleNumber, forceOverride = false) {
-
-  const { data: circleData } = await supabase
-    .from('circles')
-    .select('name, contribution_amount, cycle_duration_days, target_member_count')
-    .eq('id', circleId)
-    .single();
-
-  if (!circleData) {
-    console.log('could not load circle data for payout check');
-    return;
-  }
-
-  const {count:memberCount}= await supabase
-  .from('circle_members')
-  .select('*',{count:"exact",head:true})
-  .eq('circle_id',circleId)
-
-  if (memberCount < circleData.target_member_count) {
-    console.log('STOPPED: circle not full yet');
-    return;
-  }
-
-  const {count:paidCount}=await supabase
-  .from("contributions")
-  .select('*',{count:'exact',head:true})
-  .eq('circle_id',circleId)
-  .eq('cycle_number',cycleNumber);
-
-  if(paidCount< memberCount && !forceOverride){
-    console.log('STOPPED: not everyone paid and not forcing');
-    return;
-  }
-
-  const position = ((cycleNumber - 1) % memberCount) + 1;
-
-  const {data:collector} =await supabase
-  .from('circle_members')
-  .select('user_id')
-  .eq('circle_id',circleId)
-  .eq('payout_position', position)
-  .maybeSingle();
-
-  if(!collector){
-    console.log('STOPPED: No collector found for this cycle');
-    return;
-  }
-
-  const payoutAmount = circleData.contribution_amount * paidCount;
-  const nextDueDate = new Date(Date.now() + circleData.cycle_duration_days * 24 * 60 * 60 * 1000).toISOString();
-
-  const { error: payoutError } = await supabase.rpc('process_payout', {
-    p_circle_id: circleId,
-    p_cycle_number: cycleNumber,
-    p_collector_id: collector.user_id,
-    p_payout_amount: payoutAmount,
-    p_circle_name: circleData.name,
-    p_next_due_date: nextDueDate
-  });
-
-  if (payoutError) {
-    console.log('STOPPED: Error processing payout', payoutError.message);
-    alert('Payout failed. Please contact support.');
-    return;
-  }
-
-  if (selectedCircle && selectedCircle.id === circleId) {
-    setSelectedCircle({ ...selectedCircle, current_cycle: cycleNumber + 1, current_cycle_due_date: nextDueDate });
-  }
-
-  console.log('PAYOUT COMPLETE for cycle', cycleNumber);
-  alert('Cycle complete! Payout has been processed.');
-  fetchCircles();
-  fetchContributions(circleId, cycleNumber + 1);
-}
-
 async function handlePayContribution(){
+  const oldCycle = selectedCircle.current_cycle;
+
   const {data: existing} = await supabase
   .from('contributions')
   .select('id')
   .eq('circle_id', selectedCircle.id)
   .eq('user_id', session.user.id)
-  .eq('cycle_number', selectedCircle.current_cycle)
+  .eq('cycle_number', oldCycle)
   .maybeSingle();
 
   if(existing){
@@ -529,25 +357,41 @@ async function handlePayContribution(){
   const {error} = await supabase.rpc('pay_contribution', {
     p_circle_id: selectedCircle.id,
     p_user_id: session.user.id,
-    p_cycle_number: selectedCircle.current_cycle,
+    p_cycle_number: oldCycle,
     p_amount: selectedCircle.contribution_amount,
-    p_description: `Contribution for ${selectedCircle.name} - Cycle ${selectedCircle.current_cycle}`
+    p_description: `Contribution for ${selectedCircle.name} - Cycle ${oldCycle}`
   });
 
   if (error) {
     console.log('Error paying contribution', error.message);
-    alert(error.message.includes('Insufficient') ? 'Insufficient balance. Please fund your wallet.' : 'Payment failed. Please try again.');
+    const msg = error.message || '';
+    const known = ['no longer open', 'already paid', 'not full yet', 'completed all its cycles', 'not a member']
+      .some((phrase) => msg.includes(phrase));
+    alert(
+      msg.includes('Insufficient')
+        ? 'Insufficient balance. Please fund your wallet.'
+        : known
+          ? msg
+          : 'Payment failed. Please try again.'
+    );
+    if (msg.includes('no longer open')) openCircle(selectedCircle.id);
     return;
   }
 
-  alert('Contribution paid successfully!');
-  fetchContributions(selectedCircle.id, selectedCircle.current_cycle);
+  const fresh = await openCircle(selectedCircle.id);
   fetchWalletBalance();
-  checkAndTriggerPayouts(selectedCircle.id, selectedCircle.current_cycle);
+  fetchCircles();
+
+  alert(
+    fresh && fresh.current_cycle > oldCycle
+      ? 'Contribution paid. The cycle is complete and the payout has been processed!'
+      : 'Contribution paid successfully!'
+  );
 }
 
-const nextCollectorName = selectedCircle && members.length
-  ? members.find((m) => m.payout_position === ((selectedCircle.current_cycle - 1) % members.length) + 1)?.full_name || '—'
+const sortedMembers = [...members].sort((a, b) => a.payout_position - b.payout_position);
+const nextCollectorName = selectedCircle && sortedMembers.length
+  ? (sortedMembers[(selectedCircle.current_cycle - 1) % sortedMembers.length]?.full_name || '—')
   : '—';
 
 return (
@@ -584,105 +428,115 @@ return (
           <h1 className="page-title">{selectedCircle.name}</h1>
           <p className="page-sub">
             ₦{selectedCircle.contribution_amount.toLocaleString()} per cycle · {members.length} of {selectedCircle.target_member_count} members
-            {selectedCircle.current_cycle_due_date && ` · Due ${new Date(selectedCircle.current_cycle_due_date).toLocaleDateString()}`}
+            {selectedCircle.current_cycle <= selectedCircle.target_member_count
+              ? ` · Cycle ${selectedCircle.current_cycle} of ${selectedCircle.target_member_count}`
+              : ' · Completed'}
+            {selectedCircle.current_cycle_due_date && selectedCircle.current_cycle <= selectedCircle.target_member_count &&
+              ` · Due ${new Date(selectedCircle.current_cycle_due_date).toLocaleDateString()}`}
           </p>
-        </div>
 
-        {myDebts.length > 0 && (
-          <div style={{ marginTop: '16px', padding: '12px', background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: '8px' }}>
-            <p style={{ margin: '0 0 8px', fontWeight: '500', color: '#b91c1c' }}>You owe money in this circle</p>
-            {myDebts.map((debt) => (
-              <div key={debt.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
-                <span>₦{debt.amount.toLocaleString()} — Cycle {debt.cycle_number}</span>
+          {myDebts.length > 0 && (
+            <div style={{ marginTop: '16px', padding: '12px', background: '#fef2f2', border: '1px solid #fca5a5', borderRadius: '8px' }}>
+              <p style={{ margin: '0 0 8px', fontWeight: '500', color: '#b91c1c' }}>You owe money in this circle</p>
+              {myDebts.map((debt) => (
+                <div key={debt.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '8px' }}>
+                  <span>₦{debt.amount.toLocaleString()} — Cycle {debt.cycle_number}</span>
+                  <button
+                    onClick={() => handleSettleDebt(debt)}
+                    style={{ background: '#b91c1c', color: 'white', border: 'none', borderRadius: '6px', padding: '6px 12px', cursor: 'pointer' }}
+                  >
+                    Pay now
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {members.length >= selectedCircle.target_member_count ? (
+            selectedCircle.current_cycle > selectedCircle.target_member_count ? (
+              <p className="dashboard-sub" style={{ marginTop: '20px' }}>
+                This circle has completed all its cycles.
+              </p>
+            ) : (
+              <div className="collect-card">
+                <p className="collect-label">Next to collect</p>
+                <p className="collect-name">{nextCollectorName}</p>
+                <div className="avatar-lg">{nextCollectorName.slice(0, 2).toUpperCase()}</div>
                 <button
-                  onClick={() => handleSettleDebt(debt)}
-                  style={{ background: '#b91c1c', color: 'white', border: 'none', borderRadius: '6px', padding: '6px 12px', cursor: 'pointer' }}
+                  className="btn-primary"
+                  style={{ width: '100%' }}
+                  onClick={handlePayContribution}
+                  disabled={paidUserIds.includes(session.user.id)}
                 >
-                  Pay now
+                  {paidUserIds.includes(session.user.id) ? 'Already Paid' : `Pay ₦${selectedCircle.contribution_amount.toLocaleString()}`}
                 </button>
+              </div>
+            )
+          ) : (
+            <p className="dashboard-sub" style={{ marginTop: '20px' }}>
+              Waiting for more members to join before payments can start. The first deadline starts once the circle is full.
+            </p>
+          )}
+
+          <div className="section-head" style={{ marginTop: '28px' }}>
+            <h3 className="section-title">Members</h3>
+          </div>
+
+          {selectedCircle.created_by === session.user.id && (
+            <>
+              <div className="member-search">
+                {searchIcon}
+                <input
+                  type="email"
+                  placeholder="Enter an email to invite"
+                  value={inviteEmail}
+                  onChange={(e) => setInviteEmail(e.target.value)}
+                />
+                <button
+                  className="member-search-btn"
+                  onClick={handleInvite}
+                  disabled={!emailMatch || emailMatch === 'not_found'}
+                >
+                  Invite
+                </button>
+              </div>
+              <p className="member-search-hint">
+                {checkingEmail
+                  ? 'Searching…'
+                  : emailMatch === 'not_found'
+                    ? 'No user found with that email.'
+                    : emailMatch
+                      ? `Send an invite to ${emailMatch.full_name}`
+                      : 'Name search is coming soon — email works for now'}
+              </p>
+              {!checkingEmail && emailMatch && emailMatch !== 'not_found' && (
+                <div className="member-match-row">
+                  <span className="member-avatar">{emailMatch.full_name.slice(0, 2).toUpperCase()}</span>
+                  <div className="member-info">
+                    <p className="member-name">{emailMatch.full_name}</p>
+                  </div>
+                </div>
+              )}
+            </>
+          )}
+
+          <div className="member-list">
+            {members.map((member) => (
+              <div key={member.user_id} className="member-row">
+                <span className="member-avatar">{member.full_name.slice(0, 2).toUpperCase()}</span>
+                <div className="member-info">
+                  <p className="member-name">{member.full_name}{member.user_id === session.user.id ? ' (You)' : ''}</p>
+                  <p className="member-role">{member.role}</p>
+                </div>
+                <span className={`member-status ${paidUserIds.includes(member.user_id) ? 'member-status--paid' : 'member-status--pending'}`}>
+                  {paidUserIds.includes(member.user_id) ? 'Paid' : 'Pending'}
+                </span>
+                {selectedCircle.created_by === session.user.id && member.role !== 'creator' && (
+                  <button className="member-remove" onClick={() => handleDeleteMember(member.user_id)}>Remove</button>
+                )}
               </div>
             ))}
           </div>
-        )}
-
-        {members.length >= selectedCircle.target_member_count ? (
-          <div className="collect-card">
-            <p className="collect-label">Next to collect</p>
-            <p className="collect-name">{nextCollectorName}</p>
-            <div className="avatar-lg">{nextCollectorName.slice(0, 2).toUpperCase()}</div>
-            <button
-              className="btn-primary"
-              style={{ width: '100%' }}
-              onClick={handlePayContribution}
-              disabled={paidUserIds.includes(session.user.id)}
-            >
-              {paidUserIds.includes(session.user.id) ? 'Already Paid' : `Pay ₦${selectedCircle.contribution_amount.toLocaleString()}`}
-            </button>
-          </div>
-        ) : (
-          <p className="dashboard-sub" style={{ marginTop: '20px' }}>
-            Waiting for more members to join before payments can start.
-          </p>
-        )}
-
-        <div className="section-head" style={{ marginTop: '28px' }}>
-          <h3 className="section-title">Members</h3>
-        </div>
-
-        {selectedCircle.created_by === session.user.id && (
-          <>
-            <div className="member-search">
-              {searchIcon}
-              <input
-                type="email"
-                placeholder="Enter an email to invite"
-                value={inviteEmail}
-                onChange={(e) => setInviteEmail(e.target.value)}
-              />
-              <button
-                className="member-search-btn"
-                onClick={handleInvite}
-                disabled={!emailMatch || emailMatch === 'not_found'}
-              >
-                Invite
-              </button>
-            </div>
-            <p className="member-search-hint">
-              {checkingEmail
-                ? 'Searching…'
-                : emailMatch === 'not_found'
-                  ? 'No user found with that email.'
-                  : emailMatch
-                    ? `Send an invite to ${emailMatch.full_name}`
-                    : 'Name search is coming soon — email works for now'}
-            </p>
-            {!checkingEmail && emailMatch && emailMatch !== 'not_found' && (
-              <div className="member-match-row">
-                <span className="member-avatar">{emailMatch.full_name.slice(0, 2).toUpperCase()}</span>
-                <div className="member-info">
-                  <p className="member-name">{emailMatch.full_name}</p>
-                </div>
-              </div>
-            )}
-          </>
-        )}
-
-        <div className="member-list">
-          {members.map((member) => (
-            <div key={member.user_id} className="member-row">
-              <span className="member-avatar">{member.full_name.slice(0, 2).toUpperCase()}</span>
-              <div className="member-info">
-                <p className="member-name">{member.full_name}{member.user_id === session.user.id ? ' (You)' : ''}</p>
-                <p className="member-role">{member.role}</p>
-              </div>
-              <span className={`member-status ${paidUserIds.includes(member.user_id) ? 'member-status--paid' : 'member-status--pending'}`}>
-                {paidUserIds.includes(member.user_id) ? 'Paid' : 'Pending'}
-              </span>
-              {selectedCircle.created_by === session.user.id && member.role !== 'creator' && (
-                <button className="member-remove" onClick={() => handleDeleteMember(member.user_id)}>Remove</button>
-              )}
-            </div>
-          ))}
         </div>
       </div>
     ) : (
@@ -729,4 +583,5 @@ return (
   </div>
 );
 }
+
 export default CirclePage;

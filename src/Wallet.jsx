@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from './supabaseClient.js';
-import PinModal from './PinModal.jsx';
 import AmountModal from './AmountModal.jsx';
+import WithdrawModal from './WithdrawModal.jsx';
 
 function WalletPage({ session }) {
   const [balance, setBalance] = useState(null);
@@ -10,9 +10,10 @@ function WalletPage({ session }) {
   const [showSetPin, setShowSetPin] = useState(false);
   const [newPin, setNewPin] = useState('');
   const [forgotPin, setForgotPin] = useState(false);
-  const [showPinModal, setShowPinModal] = useState(false);
-  const [pendingWithdrawAmount, setPendingWithdrawAmount] = useState(null);
-  const [amountModalMode, setAmountModalMode] = useState(null);
+  const [pinError, setPinError] = useState('');
+  const [savingPin, setSavingPin] = useState(false);
+  const [showFund, setShowFund] = useState(false);
+  const [showWithdraw, setShowWithdraw] = useState(false);
   const [banner, setBanner] = useState(null);
 
   useEffect(() => {
@@ -51,68 +52,49 @@ function WalletPage({ session }) {
   }
 
   async function checkPinStatus() {
-    const { data } = await supabase
-      .from('profiles')
-      .select('pin_hash')
-      .eq('id', session.user.id)
-      .single();
-
-    setHasPin(!!(data && data.pin_hash));
+    const { data } = await supabase.rpc('has_pin');
+    setHasPin(data === true);
   }
 
   async function handleSetPin() {
+    setPinError('');
+
     if (newPin.length < 4) {
-      alert('PIN must be at least 4 digits');
+      setPinError('PIN must be at least 4 digits');
       return;
     }
 
-    if (hasPin && !forgotPin) {
+    const body = { new_pin: newPin };
+        if (hasPin && !forgotPin) {
       const currentPin = prompt('Enter your current PIN to confirm this change');
       if (!currentPin) return;
-
-      const { data: verified, error: verifyError } = await supabase.rpc('verify_pin', {
-        p_user_id: session.user.id,
-        p_pin: currentPin
-      });
-
-      if (verifyError) {
-        alert(verifyError.message);
-        return;
-      }
-
-      if (!verified) {
-        alert('Current PIN is incorrect.');
-        return;
-      }
+      body.current_pin = currentPin;
     }
 
-    if (forgotPin) {
+    if (!hasPin || forgotPin) {
       const password = prompt('Enter your account password to confirm this change');
       if (!password) return;
-
-      const { error: authError } = await supabase.auth.signInWithPassword({
-        email: session.user.email,
-        password: password
-      });
-
-      if (authError) {
-        alert('Incorrect password.');
-        return;
-      }
+      body.password = password;
     }
 
-    const { error } = await supabase.rpc('set_pin', {
-      p_user_id: session.user.id,
-      p_pin: newPin
-    });
+
+    setSavingPin(true);
+    const { data, error } = await supabase.functions.invoke('pin-manage', { body });
+    setSavingPin(false);
 
     if (error) {
-      console.log('error setting pin', error.message);
-      alert('Could not set PIN. Please try again.');
+      let message = 'Could not set PIN. Please try again.';
+      try {
+        const details = await error.context.json();
+        if (details?.error) message = details.error;
+      } catch {
+        // keep the default message
+      }
+      setPinError(message);
       return;
     }
 
-    alert('PIN set successfully!');
+    setBanner({ type: 'success', message: 'PIN set successfully!' });
     setNewPin('');
     setShowSetPin(false);
     setForgotPin(false);
@@ -120,51 +102,40 @@ function WalletPage({ session }) {
   }
 
   async function confirmFund(amount) {
-    setAmountModalMode(null);
-    const { error } = await supabase.rpc('add_ledger_entry', {
-      p_wallet_id: session.user.id,
-      p_amount: amount,
-      p_direction: 'credit',
-      p_description: 'Wallet funding'
+    setShowFund(false);
+
+    if (!Number.isInteger(amount)) {
+      setBanner({ type: 'error', message: 'Please enter a whole amount in naira.' });
+      return;
+    }
+
+    const { data, error } = await supabase.functions.invoke('fund-initialize', {
+      body: { amount },
     });
 
     if (error) {
-      console.log('Error funding wallet', error.message);
-      setBanner({ type: 'error', message: 'Could not fund wallet. Please try again.' });
-    } else {
-      setBanner({ type: 'success', message: `₦${amount.toLocaleString()} added to your wallet.` });
-      fetchBalance();
-      fetchTransactions();
+      let message = 'Could not start payment. Please try again.';
+      try {
+        const details = await error.context.json();
+        if (details?.error) message = details.error;
+      } catch {
+        // keep the default message
+      }
+      setBanner({ type: 'error', message });
+      return;
     }
+
+    window.location.href = data.authorization_url;
   }
 
-  function confirmWithdrawAmount(amount) {
-    setAmountModalMode(null);
-    setPendingWithdrawAmount(amount);
-    setShowPinModal(true);
-  }
-
-  async function completeWithdraw() {
-    setShowPinModal(false);
-    const { error } = await supabase.rpc('add_ledger_entry', {
-      p_wallet_id: session.user.id,
-      p_amount: pendingWithdrawAmount,
-      p_direction: 'debit',
-      p_description: 'Wallet withdrawn'
+  function handleWithdrawDone(result) {
+    setShowWithdraw(false);
+    setBanner({
+      type: 'success',
+      message: `₦${Number(result?.receive ?? 0).toLocaleString()} is on its way to your bank.`
     });
-
-    if (error) {
-      console.log('Error withdrawing', error.message);
-      setBanner({
-        type: 'error',
-        message: error.message.includes('Insufficient') ? 'Insufficient balance.' : 'Withdrawal failed.'
-      });
-    } else {
-      setBanner({ type: 'success', message: `₦${pendingWithdrawAmount.toLocaleString()} withdrawn.` });
-      fetchBalance();
-      fetchTransactions();
-    }
-    setPendingWithdrawAmount(null);
+    fetchBalance();
+    fetchTransactions();
   }
 
   return (
@@ -177,8 +148,8 @@ function WalletPage({ session }) {
             <p className="sticky-summary-amount">₦{balance !== null ? balance.toLocaleString() : '···'}</p>
           </div>
           <div className="sticky-summary-actions">
-            <button className="primary" onClick={() => setAmountModalMode('fund')}>+ Fund</button>
-            <button className="secondary" onClick={() => setAmountModalMode('withdraw')}>Withdraw</button>
+            <button className="primary" onClick={() => setShowFund(true)}>+ Fund</button>
+            <button className="secondary" onClick={() => setShowWithdraw(true)}>Withdraw</button>
           </div>
         </div>
       </div>
@@ -233,9 +204,12 @@ function WalletPage({ session }) {
               value={newPin}
               onChange={(e) => setNewPin(e.target.value.replace(/\D/g, ''))}
             />
-            <button className="auth-button" onClick={handleSetPin}>Save PIN</button>
+            {pinError && <p style={{ color: '#b91c1c', fontSize: '13px', marginTop: '4px' }}>{pinError}</p>}
+            <button className="auth-button" onClick={handleSetPin} disabled={savingPin}>
+              {savingPin ? 'Saving…' : 'Save PIN'}
+            </button>
             <button
-              onClick={() => { setShowSetPin(false); setNewPin(''); setForgotPin(false); }}
+              onClick={() => { setShowSetPin(false); setNewPin(''); setForgotPin(false); setPinError(''); }}
               style={{ background: 'none', border: 'none', textDecoration: 'underline', cursor: 'pointer', marginTop: '8px', display: 'block' }}
             >
               Cancel
@@ -260,27 +234,18 @@ function WalletPage({ session }) {
         )}
       </div>
 
-      {amountModalMode === 'fund' && (
+      {showFund && (
         <AmountModal
           title="How much would you like to fund?"
           onConfirm={confirmFund}
-          onCancel={() => setAmountModalMode(null)}
+          onCancel={() => setShowFund(false)}
         />
       )}
 
-      {amountModalMode === 'withdraw' && (
-        <AmountModal
-          title="How much would you like to withdraw?"
-          onConfirm={confirmWithdrawAmount}
-          onCancel={() => setAmountModalMode(null)}
-        />
-      )}
-
-      {showPinModal && (
-        <PinModal
-          userId={session.user.id}
-          onSuccess={completeWithdraw}
-          onCancel={() => { setShowPinModal(false); setPendingWithdrawAmount(null); }}
+      {showWithdraw && (
+        <WithdrawModal
+          onDone={handleWithdrawDone}
+          onCancel={() => setShowWithdraw(false)}
         />
       )}
     </div>
